@@ -30,59 +30,43 @@
 
 struct udev_monitor {
     struct udev_list_entry subsystem_match;
-    struct udev_list_entry devtype_match;
     struct udev *udev;
     unsigned nlgrp;
     int refcount;
     int fd;
 };
 
-static int filter_devtype(struct udev_monitor *udev_monitor, struct udev_device *udev_device)
+/*
+ * Match subsystem and devtype as the pairs they were added in: a filter of
+ * ("drm", "drm_minor") and ("input", NULL) passes input devices, which have
+ * no devtype.
+ */
+static int filter_subsystem_devtype(struct udev_monitor *udev_monitor, struct udev_device *udev_device)
 {
     struct udev_list_entry *list_entry;
-    const char *devtype;
+    const char *subsystem, *devtype, *match;
 
-    devtype = udev_device_get_devtype(udev_device);
-    list_entry = udev_list_entry_get_next(&udev_monitor->devtype_match);
-
-    if (!list_entry) {
-        return 1;
-    }
-
-    if (!devtype) {
-        return 0;
-    }
-
-    while (list_entry) {
-        if (strcmp(devtype, udev_list_entry_get_name(list_entry)) == 0) {
-            return 1;
-        }
-
-        list_entry = udev_list_entry_get_next(list_entry);
-    }
-
-    return 0;
-}
-
-static int filter_subsystem(struct udev_monitor *udev_monitor, struct udev_device *udev_device)
-{
-    struct udev_list_entry *list_entry;
-    const char *subsystem;
-
-    subsystem = udev_device_get_subsystem(udev_device);
     list_entry = udev_list_entry_get_next(&udev_monitor->subsystem_match);
 
     if (!list_entry) {
         return 1;
     }
 
+    subsystem = udev_device_get_subsystem(udev_device);
+
     if (!subsystem) {
         return 0;
     }
 
+    devtype = udev_device_get_devtype(udev_device);
+
     while (list_entry) {
         if (strcmp(subsystem, udev_list_entry_get_name(list_entry)) == 0) {
-            return 1;
+            match = udev_list_entry_get_value(list_entry);
+
+            if (!match || (devtype && strcmp(devtype, match) == 0)) {
+                return 1;
+            }
         }
 
         list_entry = udev_list_entry_get_next(list_entry);
@@ -129,8 +113,7 @@ struct udev_device *udev_monitor_receive_device(struct udev_monitor *udev_monito
             continue;
         }
 
-        if (!filter_subsystem(udev_monitor, udev_device) ||
-            !filter_devtype(udev_monitor, udev_device)) {
+        if (!filter_subsystem_devtype(udev_monitor, udev_device)) {
             udev_device_unref(udev_device);
             continue;
         }
@@ -185,11 +168,7 @@ int udev_monitor_filter_add_match_subsystem_devtype(struct udev_monitor *udev_mo
         return -1;
     }
 
-    udev_list_entry_add(&udev_monitor->subsystem_match, subsystem, NULL, 0);
-
-    if (devtype) {
-        udev_list_entry_add(&udev_monitor->devtype_match, devtype, NULL, 0);
-    }
+    udev_list_entry_add(&udev_monitor->subsystem_match, subsystem, devtype, 0);
 
     return 0;
 }
@@ -256,7 +235,6 @@ struct udev_monitor *udev_monitor_unref(struct udev_monitor *udev_monitor)
         return NULL;
     }
 
-    udev_list_entry_free_all(&udev_monitor->devtype_match);
     udev_list_entry_free_all(&udev_monitor->subsystem_match);
 
     close(udev_monitor->fd);
